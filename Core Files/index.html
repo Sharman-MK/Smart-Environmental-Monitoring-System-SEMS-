@@ -496,7 +496,7 @@
                                     </span>
                                 </div>
                                 <div class="grid grid-cols-12 gap-3 items-center">
-                                    <input id="temp-threshold-slider" type="range" min="18" max="45" step="0.5" value="30"
+                                    <input id="temp-threshold-slider" type="range" min="18" max="80" step="0.5" value="30"
                                         class="col-span-8 sm:col-span-9 h-2 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-500">
                                     <div class="col-span-4 sm:col-span-3">
                                         <div class="relative">
@@ -1290,15 +1290,19 @@
                         if (data.uptime_sec !== undefined) espUptimeSec = Number(data.uptime_sec);
                         if (data.simulation !== undefined) setDemoSimUI(Boolean(data.simulation));
 
-                        if (data.temp_limit && !tempInput.matches(':focus')) {
-                            limits.temperature = Number(data.temp_limit);
+                        if (data.temp_limit !== undefined && !tempInput.matches(':focus') && !tempSlider.matches(':active')) {
+                            const nextT = Number(data.temp_limit);
+                            if (nextT !== limits.temperature) lastAlert.temperature = 0;
+                            limits.temperature = nextT;
                             tempInput.value = limits.temperature;
                             tempSlider.value = limits.temperature;
                             tempDisplay.textContent = limits.temperature.toFixed(1);
                             tempStatLimit.textContent = limits.temperature.toFixed(1) + '°C';
                         }
-                        if (data.air_limit && !airInput.matches(':focus')) {
-                            limits.air = Number(data.air_limit);
+                        if (data.air_limit !== undefined && !airInput.matches(':focus') && !airSlider.matches(':active')) {
+                            const nextA = Number(data.air_limit);
+                            if (nextA !== limits.air) lastAlert.air = 0;
+                            limits.air = nextA;
                             airInput.value = limits.air;
                             airSlider.value = limits.air;
                             airDisplay.textContent = limits.air;
