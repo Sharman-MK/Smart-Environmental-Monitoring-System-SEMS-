@@ -1191,7 +1191,7 @@ const char INDEX_HTML[] PROGMEM = R"SEMS_HTML(<!doctype html>
                                     </span>
                                 </div>
                                 <div class="grid grid-cols-12 gap-3 items-center">
-                                    <input id="temp-threshold-slider" type="range" min="18" max="45" step="0.5" value="30"
+                                    <input id="temp-threshold-slider" type="range" min="18" max="80" step="0.5" value="30"
                                         class="col-span-8 sm:col-span-9 h-2 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-500">
                                     <div class="col-span-4 sm:col-span-3">
                                         <div class="relative">
@@ -1985,15 +1985,19 @@ const char INDEX_HTML[] PROGMEM = R"SEMS_HTML(<!doctype html>
                         if (data.uptime_sec !== undefined) espUptimeSec = Number(data.uptime_sec);
                         if (data.simulation !== undefined) setDemoSimUI(Boolean(data.simulation));
 
-                        if (data.temp_limit && !tempInput.matches(':focus')) {
-                            limits.temperature = Number(data.temp_limit);
+                        if (data.temp_limit !== undefined && !tempInput.matches(':focus') && !tempSlider.matches(':active')) {
+                            const nextT = Number(data.temp_limit);
+                            if (nextT !== limits.temperature) lastAlert.temperature = 0;
+                            limits.temperature = nextT;
                             tempInput.value = limits.temperature;
                             tempSlider.value = limits.temperature;
                             tempDisplay.textContent = limits.temperature.toFixed(1);
                             tempStatLimit.textContent = limits.temperature.toFixed(1) + '°C';
                         }
-                        if (data.air_limit && !airInput.matches(':focus')) {
-                            limits.air = Number(data.air_limit);
+                        if (data.air_limit !== undefined && !airInput.matches(':focus') && !airSlider.matches(':active')) {
+                            const nextA = Number(data.air_limit);
+                            if (nextA !== limits.air) lastAlert.air = 0;
+                            limits.air = nextA;
                             airInput.value = limits.air;
                             airSlider.value = limits.air;
                             airDisplay.textContent = limits.air;
@@ -2665,6 +2669,8 @@ bool sendTelegramSafe(const String& chatId, const String& msg) {
   return false;
 }
 
+bool checkTelegramAlerts();
+
 void handleNewMessages(int numNewMessages) {
   for (int i = 0; i < numNewMessages; i++) {
     String chat_id = String(bot.messages[i].chat_id);
@@ -2686,6 +2692,7 @@ void handleNewMessages(int numNewMessages) {
       welcome += "• `/hum` - Current DHT22 humidity\n";
       welcome += "• `/air` - MQ-135 gas ppm & air quality\n";
       welcome += "• `/limits` - View configured alert limits\n";
+      welcome += "• `/setlimit t80 g500` - Set Temp (t) & Gas ppm (g) limits\n";
       welcome += "• `/simulate` - Trigger Demo Simulation spike\n";
       welcome += "• `/stop` - Stop simulation & restore live sensors\n";
       welcome += "• `/test` - Trigger a test notification";
@@ -2713,9 +2720,59 @@ void handleNewMessages(int numNewMessages) {
     }
     else if (text == "/limits") {
       String lim = "⚙️ *Configured Incident Limits:*\n";
-      lim += "• Temperature Limit: *" + String(g_tempLimit, 1) + " °C*\n";
-      lim += "• Air Quality Limit: *" + String(g_airLimit) + " ppm*";
-      bot.sendMessage(chat_id, lim, "Markdown");
+      lim += "• Temp Limit: *" + String(g_tempLimit, 1) + " °C*\n";
+      lim += "• Gas Limit (ppm): *" + String(g_airLimit) + " ppm*";
+      sendTelegramSafe(chat_id, lim);
+    }
+    else if (text.startsWith("/setlimit")) {
+      String args = text.substring(9);
+      args.trim();
+      float nextTemp = g_tempLimit;
+      int   nextGas  = g_airLimit;
+      bool  gotTemp  = false;
+      bool  gotGas   = false;
+
+      // Parse tokens like "t80 g800" (either order, single or both)
+      int pos = 0;
+      while (pos < (int)args.length()) {
+        while (pos < (int)args.length() && args[pos] == ' ') pos++;
+        if (pos >= (int)args.length()) break;
+        int nextSpace = args.indexOf(' ', pos);
+        String tok = (nextSpace == -1) ? args.substring(pos) : args.substring(pos, nextSpace);
+        pos = (nextSpace == -1) ? args.length() : nextSpace + 1;
+        tok.trim();
+        if (tok.length() >= 2) {
+          char prefix = tolower(tok[0]);
+          String valStr = tok.substring(1);
+          if (valStr.startsWith("=") || valStr.startsWith(":")) valStr = valStr.substring(1);
+          if (prefix == 't' && valStr.length() > 0 && (isdigit((unsigned char)valStr[0]) || valStr[0] == '-')) {
+            float v = valStr.toFloat();
+            if (v >= -20.0f && v <= 100.0f) { nextTemp = v; gotTemp = true; }
+          } else if (prefix == 'g' && valStr.length() > 0 && isdigit((unsigned char)valStr[0])) {
+            nextGas = constrain(valStr.toInt(), 0, 5000);
+            gotGas = true;
+          }
+        }
+      }
+
+      if (gotTemp || gotGas) {
+        g_tempLimit = nextTemp;
+        g_airLimit  = nextGas;
+        g_lastTempAlertMs = 0;
+        g_lastAirAlertMs  = 0;
+        Serial.printf("[TELEGRAM CONFIG] Limits updated via /setlimit -> Temp: %.1f C | Gas: %d ppm\n", g_tempLimit, g_airLimit);
+        String ok = "✅ *Thresholds Updated:*\n";
+        ok += "• Temp Limit: *" + String(g_tempLimit, 1) + " °C*\n";
+        ok += "• Gas Limit (ppm): *" + String(g_airLimit) + " ppm*";
+        sendTelegramSafe(chat_id, ok);
+        checkTelegramAlerts();
+      } else {
+        String usage = "⚙️ *Set Threshold Limits*\n";
+        usage += "• Temp Limit: *" + String(g_tempLimit, 1) + " °C*\n";
+        usage += "• Gas Limit (ppm): *" + String(g_airLimit) + " ppm*\n\n";
+        usage += "Usage: `/setlimit t<temp> g<ppm>`\nExample: `/setlimit t80 g500`";
+        sendTelegramSafe(chat_id, usage);
+      }
     }
     else if (text == "/simulate") {
       g_demoSimulation = true;
@@ -2733,7 +2790,7 @@ void handleNewMessages(int numNewMessages) {
       bot.sendMessage(chat_id, "🔔 *SEMS TEST INCIDENT*\nTelegram notification pipeline verified and fully operational.", "Markdown");
     }
     else {
-      bot.sendMessage(chat_id, "📖 *SEMS Bot Help:*\nUse `/status`, `/temp`, `/hum`, `/air`, `/limits`, `/simulate`, `/stop`, or `/test`.", "Markdown");
+      bot.sendMessage(chat_id, "📖 *SEMS Bot Help:*\nUse `/status`, `/temp`, `/hum`, `/air`, `/limits`, `/setlimit t80 g500`, `/simulate`, `/stop`, or `/test`.", "Markdown");
     }
   }
 }
